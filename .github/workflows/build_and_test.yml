@@ -629,88 +629,9 @@ jobs:
           name: e2e-ee-coverage
           path: ./apps/meteor/coverage*
 
-  deploy:
-    runs-on: ubuntu-20.04
-    if: github.event_name == 'release' || github.ref == 'refs/heads/develop'
-    needs: [build, release-versions]
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Restore build
-        uses: actions/download-artifact@v2
-        with:
-          name: build
-          path: /tmp/build
-
-      - name: Publish assets
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: 'us-east-1'
-          GPG_PASSWORD: ${{ secrets.GPG_PASSWORD }}
-          REDHAT_REGISTRY_PID: ${{ secrets.REDHAT_REGISTRY_PID }}
-          REDHAT_REGISTRY_KEY: ${{ secrets.REDHAT_REGISTRY_KEY }}
-          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
-        run: |
-          REPO_VERSION=$(node -p "require('./package.json').version")
-          if [[ '${{ github.event_name }}' = 'release' ]]; then
-            GIT_TAG="${GITHUB_REF#*tags/}"
-            GIT_BRANCH=""
-            ARTIFACT_NAME="${REPO_VERSION}"
-            RC_VERSION=$GIT_TAG
-
-            if [[ '${{ needs.release-versions.outputs.release }}' = 'release-candidate' ]]; then
-              SNAP_CHANNEL=candidate
-              RC_RELEASE=candidate
-            elif [[ '${{ needs.release-versions.outputs.release }}' = 'latest' ]]; then
-              SNAP_CHANNEL=stable
-              RC_RELEASE=stable
-            fi
-          else
-            GIT_TAG=""
-            GIT_BRANCH="${GITHUB_REF#*heads/}"
-            ARTIFACT_NAME="${REPO_VERSION}.$GITHUB_SHA"
-            RC_VERSION="${REPO_VERSION}"
-            SNAP_CHANNEL=edge
-            RC_RELEASE=develop
-          fi;
-          ROCKET_DEPLOY_DIR="/tmp/deploy"
-          FILENAME="$ROCKET_DEPLOY_DIR/rocket.chat-$ARTIFACT_NAME.tgz";
-
-          aws s3 cp s3://rocketchat/sign.key.gpg .github/sign.key.gpg
-
-          mkdir -p $ROCKET_DEPLOY_DIR
-
-          cp .github/sign.key.gpg /tmp
-          gpg --yes --batch --passphrase=$GPG_PASSWORD /tmp/sign.key.gpg
-          gpg --allow-secret-key-import --import /tmp/sign.key
-          rm /tmp/sign.key
-
-          ln -s /tmp/build/Rocket.Chat.tar.gz "$FILENAME"
-          gpg --armor --detach-sign "$FILENAME"
-
-          aws s3 cp $ROCKET_DEPLOY_DIR/ s3://download.rocket.chat/build/ --recursive
-
-          curl -H "Content-Type: application/json" -H "X-Update-Token: $UPDATE_TOKEN" -d \
-              "{\"nodeVersion\": \"14.19.3\", \"compatibleMongoVersions\": [\"4.2\", \"4.4\", \"5.0\"], \"commit\": \"$GITHUB_SHA\", \"tag\": \"$RC_VERSION\", \"branch\": \"$GIT_BRANCH\", \"artifactName\": \"$ARTIFACT_NAME\", \"releaseType\": \"$RC_RELEASE\"}" \
-              https://releases.rocket.chat/update
-
-          # Makes build fail if the release isn't there
-          curl --fail https://releases.rocket.chat/$RC_VERSION/info
-
-          if [[ $GIT_TAG ]]; then
-            curl -X POST \
-              https://connect.redhat.com/api/v2/projects/$REDHAT_REGISTRY_PID/build \
-              -H "Authorization: Bearer $REDHAT_REGISTRY_KEY" \
-              -H 'Cache-Control: no-cache' \
-              -H 'Content-Type: application/json' \
-              -d '{"tag":"'$GIT_TAG'"}'
-          fi
-
   docker-image-publish:
     runs-on: ubuntu-20.04
-    needs: [deploy, build-docker-preview, release-versions]
+    needs: [build, build-docker-preview, release-versions]
 
     strategy:
       matrix:
@@ -721,12 +642,6 @@ jobs:
       IMAGE_NAME: 'rocketchat/rocket.chat'
 
     steps:
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_PASS }}
-
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2
         with:
@@ -791,19 +706,13 @@ jobs:
 
   services-docker-image-publish:
     runs-on: ubuntu-20.04
-    needs: [deploy, release-versions]
+    needs: [build, release-versions]
 
     strategy:
       matrix:
         service: ['account', 'authorization', 'ddp-streamer', 'presence', 'stream-hub']
 
     steps:
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_PASS }}
-
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2
         with:
